@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 )
 
@@ -28,10 +31,64 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
 	// TODO: implement the upload here
+	// Parse form data
+	const maxMemory = 10 << 20
+	r.ParseMultipartForm(maxMemory)
 
-	respondWithJSON(w, http.StatusOK, struct{}{})
+	// Get image data from the form
+	file, header, err := r.FormFile("thumbnail")
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
+		return
+	}
+	defer file.Close()
+	mediaType := header.Header.Get("Content-Type")
+
+	// Read image data
+	imageData, err := io.ReadAll(file)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to get image data", err)
+		return
+	}
+
+	// Get the video metadata & validate the user
+	metadata, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Image metadata not found", err)
+		return
+	}
+	if metadata.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Unable to authorize user", err)
+		return
+	}
+
+	// Create a thumbnail and add to global map
+	tn := thumbnail{
+		data:      imageData,
+		mediaType: mediaType,
+	}
+	videoThumbnails[userID] = tn
+	thumbnailURL := fmt.Sprintf("http://localhost:%v/api/thumbnails/%v", cfg.port, userID)
+
+	video := database.Video{
+		ID:           metadata.ID,
+		CreatedAt:    metadata.CreatedAt,
+		UpdatedAt:    time.Now(),
+		ThumbnailURL: &thumbnailURL,
+		VideoURL:     metadata.VideoURL,
+		CreateVideoParams: database.CreateVideoParams{
+			Title:       metadata.Title,
+			Description: metadata.Description,
+			UserID:      metadata.UserID,
+		},
+	}
+	err = cfg.db.UpdateVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Unable to find video", err)
+		return
+	}
+	respondWithJSON(w, http.StatusOK, video)
 }
