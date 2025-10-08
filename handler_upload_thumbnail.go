@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -71,7 +73,14 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Save thumbnail to a file in assets
-	fp := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%v.%v", videoID, parts[1]))
+	bytes := make([]byte, 32)
+	_, err = rand.Read(bytes)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "unable to fill bytes", err)
+		return
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(bytes)
+	fp := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%v.%v", encoded, parts[1]))
 	fd, err := os.Create(fp)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to create file", err)
