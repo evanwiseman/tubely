@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,21 +49,38 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer file.Close()
-	mediaType := header.Header.Get("Content-Type")
+	contentType := header.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "invalid media type", err)
+		return
+	}
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(
+			w,
+			http.StatusBadRequest,
+			"unsupported media type",
+			errors.New("unsupported type"),
+		)
+		return
+	}
+
+	parts := strings.Split(mediaType, "/")
+	if len(parts) != 2 {
+		respondWithError(w, http.StatusBadRequest, "invalid media type", err)
+	}
 
 	// Save thumbnail to a file in assets
-	fileExtension := strings.ReplaceAll(mediaType, "image/", "")
-	fp := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%v.%v", videoID, fileExtension))
+	fp := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%v.%v", videoID, parts[1]))
 	fd, err := os.Create(fp)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to create file", err)
+		return
 	}
 	io.Copy(fd, file)
 
-	thumbnailURL := fmt.Sprintf(
-		"http://localhost:%v/assets/%v.%v",
-		cfg.port, videoID, fileExtension,
-	)
+	// Create thumbnail url mapped to file system
+	thumbnailURL := fmt.Sprintf("http://localhost:%v/%v", cfg.port, fp)
 
 	// Get the video metadata & validate the user
 	metadata, err := cfg.db.GetVideo(videoID)
