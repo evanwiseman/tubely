@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,6 +55,12 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Convert to a string encoding
+	encodedData := base64.StdEncoding.EncodeToString(imageData)
+
+	// Create a data URL containing the encoded data
+	dataURL := fmt.Sprintf("data:%v;base64,%v", mediaType, encodedData)
+
 	// Get the video metadata & validate the user
 	metadata, err := cfg.db.GetVideo(videoID)
 	if err != nil {
@@ -65,19 +72,11 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Create a thumbnail and add to global map
-	tn := thumbnail{
-		data:      imageData,
-		mediaType: mediaType,
-	}
-	videoThumbnails[userID] = tn
-	thumbnailURL := fmt.Sprintf("http://localhost:%v/api/thumbnails/%v", cfg.port, userID)
-
 	video := database.Video{
 		ID:           metadata.ID,
 		CreatedAt:    metadata.CreatedAt,
 		UpdatedAt:    time.Now(),
-		ThumbnailURL: &thumbnailURL,
+		ThumbnailURL: &dataURL,
 		VideoURL:     metadata.VideoURL,
 		CreateVideoParams: database.CreateVideoParams{
 			Title:       metadata.Title,
