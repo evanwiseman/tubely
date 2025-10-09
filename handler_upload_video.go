@@ -102,6 +102,21 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to get aspect ratio", err)
+		return
+	}
+	var prefix string
+	switch aspectRatio {
+	case "16:9":
+		prefix = "landscape"
+	case "9:16":
+		prefix = "portrait"
+	default:
+		prefix = "other"
+	}
+
 	// Create s3 key
 	bytes := make([]byte, 32)
 	_, err = rand.Read(bytes)
@@ -109,7 +124,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "unable to fill bytes", err)
 		return
 	}
-	key := base64.RawURLEncoding.EncodeToString(bytes) + ".mp4"
+	key := prefix + "/" + base64.RawURLEncoding.EncodeToString(bytes) + ".mp4"
 	cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         aws.String(key),
