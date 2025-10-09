@@ -19,6 +19,11 @@ import (
 )
 
 func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
+	// Set max upload memory 1MB
+	const maxMemory = 10 << 20
+	r.ParseMultipartForm(maxMemory)
+
+	// Get the videoID
 	videoIDString := r.PathValue("videoID")
 	videoID, err := uuid.Parse(videoIDString)
 	if err != nil {
@@ -26,12 +31,14 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Get the JWT Token
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Couldn't find JWT", err)
 		return
 	}
 
+	// Validate the JWT Token
 	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Couldn't validate JWT", err)
@@ -39,38 +46,42 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
+	// Get the video metadata & validate the user
+	metadata, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Image metadata not found", err)
+		return
+	}
+	if metadata.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "User not authorized", err)
+		return
+	}
 
-	// Parse form data
-	const maxMemory = 10 << 20
-	r.ParseMultipartForm(maxMemory)
-
-	// Get image data from the form
-	file, header, err := r.FormFile("thumbnail")
+	// Parse thumbnail
+	thumbnailFile, thumbnailHeader, err := r.FormFile("thumbnail")
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
 		return
 	}
-	defer file.Close()
-	contentType := header.Header.Get("Content-Type")
-	mediaType, _, err := mime.ParseMediaType(contentType)
+	defer thumbnailFile.Close()
+
+	// Get the media type and validate it's jpeg or png
+	mediaType, _, err := mime.ParseMediaType(thumbnailHeader.Header.Get("Content-Type"))
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "invalid media type", err)
 		return
 	}
 	if mediaType != "image/jpeg" && mediaType != "image/png" {
-		respondWithError(
-			w,
-			http.StatusBadRequest,
-			"unsupported media type",
-			errors.New("unsupported type"),
-		)
+		respondWithError(w, http.StatusBadRequest, "unsupported media type", errors.New("unsupported type"))
 		return
 	}
 
+	// Get the file extension
 	parts := strings.Split(mediaType, "/")
 	if len(parts) != 2 {
 		respondWithError(w, http.StatusBadRequest, "invalid media type", err)
 	}
+	fileExtension := parts[1]
 
 	// Save thumbnail to a file in assets
 	bytes := make([]byte, 32)
@@ -79,29 +90,24 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusInternalServerError, "unable to fill bytes", err)
 		return
 	}
-	encoded := base64.RawURLEncoding.EncodeToString(bytes)
-	fp := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%v.%v", encoded, parts[1]))
-	fd, err := os.Create(fp)
+
+	// Create the file at name
+	key := base64.RawURLEncoding.EncodeToString(bytes)
+	name := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%v.%v", key, fileExtension))
+	assetsFile, err := os.Create(name)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to create file", err)
 		return
 	}
-	io.Copy(fd, file)
 
-	// Create thumbnail url mapped to file system
-	thumbnailURL := fmt.Sprintf("http://localhost:%v/%v", cfg.port, fp)
-
-	// Get the video metadata & validate the user
-	metadata, err := cfg.db.GetVideo(videoID)
-	if err != nil {
-		respondWithError(w, http.StatusNotFound, "Image metadata not found", err)
-		return
-	}
-	if metadata.UserID != userID {
-		respondWithError(w, http.StatusUnauthorized, "Unable to authorize user", err)
+	// Copy the file
+	if _, err = io.Copy(assetsFile, thumbnailFile); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to copy file", err)
 		return
 	}
 
+	// Update the video with the new thumbnailURL
+	thumbnailURL := fmt.Sprintf("http://localhost:%v/%v", cfg.port, name)
 	video := database.Video{
 		ID:           metadata.ID,
 		CreatedAt:    metadata.CreatedAt,
@@ -114,9 +120,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 			UserID:      metadata.UserID,
 		},
 	}
-	err = cfg.db.UpdateVideo(video)
-	if err != nil {
-		respondWithError(w, http.StatusNotFound, "Unable to find video", err)
+	if err = cfg.db.UpdateVideo(video); err != nil {
+		respondWithError(w, http.StatusNotFound, "Unable to update video", err)
 		return
 	}
 	respondWithJSON(w, http.StatusOK, video)

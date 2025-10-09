@@ -51,14 +51,12 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get the metadata metadata
+	// Get the video metadata & validate the user
 	metadata, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusNotFound, "Video not found", err)
 		return
 	}
-
-	// Validate user owns video
 	if metadata.UserID != userID {
 		respondWithError(w, http.StatusUnauthorized, "User not authorized", err)
 		return
@@ -119,6 +117,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		ContentType: aws.String(mediaType),
 	})
 
+	// Update the video with the new videoURL
 	videoURL := fmt.Sprintf("https://%v.s3.%v.amazonaws.com/%v", cfg.s3Bucket, cfg.s3Region, key)
 	video := database.Video{
 		ID:           metadata.ID,
@@ -132,9 +131,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 			UserID:      metadata.UserID,
 		},
 	}
-
-	err = cfg.db.UpdateVideo(video)
-	if err != nil {
+	if err = cfg.db.UpdateVideo(video); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to update video", err)
 		return
 	}
